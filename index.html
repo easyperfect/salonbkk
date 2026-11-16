@@ -80,7 +80,12 @@ const today=()=>new Date(Date.now()-new Date().getTimezoneOffset()*6e4).toISOStr
 const baht=n=>'฿'+Number(n).toLocaleString('th-TH');
 const pr=n=>n?baht(n):'สอบถามราคา';
 const STATUS={pending:'รอยืนยัน',confirmed:'ยืนยันแล้ว',done:'เสร็จสิ้น',cancel:'ยกเลิก'};
-let D={services:[],stylists:[],bookings:[]},sess=null,tab='dash',pick='',msg='',taken=[],req=0;
+let D={services:[],stylists:[],bookings:[],closures:[],albums:[],photos:[]},sess=null,tab='dash',pick='',msg='',taken=[],req=0,ROLE=null,F={q:'',date:'',status:'',stylist:''},qd='',galSel='all',admAlb=0;
+const isOwner=()=>ROLE==='owner';
+const photoUrl=p=>SB+'/storage/v1/object/public/photos/'+p;
+const closedAt=(d,st,t)=>D.closures.some(c=>d>=c.start_date&&d<=c.end_date&&(c.stylist_id==null||c.stylist_id===st)&&(!c.start_time||(t&&t>=c.start_time&&t<(c.end_time||'24:00'))));
+const dayClosed=(d,st)=>D.closures.some(c=>d>=c.start_date&&d<=c.end_date&&(c.stylist_id==null||c.stylist_id===st)&&!c.start_time);
+const addDay=(d,n)=>{const x=new Date(d+'T00:00:00');x.setDate(x.getDate()+n);return new Date(x.getTime()-x.getTimezoneOffset()*6e4).toISOString().slice(0,10)};
 try{sess=JSON.parse(localStorage.getItem('sb-sess'))}catch(e){}
 
 /* ---------- เชื่อมฐานข้อมูล Supabase ---------- */
@@ -106,7 +111,9 @@ async function api(path,o={}){
  if(!r.ok){let m='';try{m=(await r.json()).message}catch(e){}const e=new Error(m||('HTTP '+r.status));e.status=r.status;throw e}
  const t=await r.text();return t?JSON.parse(t):null;
 }
-async function loadPublic(){const[s,h]=await Promise.all([api('services?select=*&order=id'),api('stylists?select=*&order=id')]);D.services=s;D.stylists=h}
+async function loadPublic(){const opt=p=>api(p).catch(()=>[]);
+ const[a,b,c,d,e]=await Promise.all([api('services?select=*&order=id'),api('stylists?select=*&order=id'),opt('closures?select=*&end_date=gte.'+today()+'&order=start_date'),opt('albums?select=*&order=id'),opt('photos?select=*&order=id')]);
+ D.services=a;D.stylists=b;D.closures=c;D.albums=d;D.photos=e}
 async function loadAdmin(){D.bookings=await api('bookings?select=*&order=date.desc,time.desc',{auth:true})}
 
 const svc1=id=>D.services.find(x=>x.id===id);
@@ -127,6 +134,7 @@ async function front(){
  <div class="hero"><div class="wrap grid"><div><h1>Easy &amp; Perfect Salon</h1><p>ตัดผม ทำสี สระไดร์ ดัดวอลลุ่ม ยืด และอื่นๆ ปากซอยลาซาล 11 ใกล้ BTS แบริ่ง มีที่จอดรถ จองคิวล่วงหน้าได้ที่นี่</p><button class="btn" onclick="document.getElementById('book').scrollIntoView()">จองคิวตอนนี้</button></div><img class="shop" src="${SHOP}" alt="หน้าร้าน Easy &amp; Perfect Salon Bangkok"></div></div>
  <section class="blk"><div class="wrap"><h2>บริการและราคา</h2><ul class="menu">${D.services.map(s=>`<li><span class="n">${esc(s.name)}${s.description?'<small>'+esc(s.description)+'</small>':''}</span><span class="p">${pr(s.price)}</span></li>`).join('')||'<li class="empty">ยังไม่มีบริการ</li>'}</ul><p style="color:var(--mute);margin-top:12px">และบริการอื่นๆ สอบถามราคาและรายละเอียดได้ที่ร้านหรือโทร 02-001-8288</p></div></section>
  ${D.stylists.length?`<section class="blk" style="background:var(--surface)"><div class="wrap"><h2>ทีมช่างของเรา</h2><div class="team">${D.stylists.map(s=>`<div><b>${esc(s.name)}</b><span>${esc(s.role)}</span></div>`).join('')}</div></div></section>`:''}
+ <section class="blk" id="gal" style="display:none"></section>
  <section class="blk"><div class="wrap"><h2>ติดต่อและแผนที่</h2><div class="info"><div>ปากซอยลาซาล 11 (สุขุมวิท 105) ใกล้ BTS แบริ่ง · มีที่จอดรถ</div><div>เปิด 10:30–20:30 น. <b>ปิดทุกวันพุธ</b></div><div>โทรจองคิว: <a href="tel:020018288">02-001-8288</a></div><div>Facebook: <a href="https://www.facebook.com/easyandperfect.salon" target="_blank" rel="noopener">Easy&amp;PerfectSalon</a></div><div style="margin-top:8px"><a class="btn" href="https://maps.google.com/?cid=14685754769739639111" target="_blank" rel="noopener" style="color:var(--onbrand)">เปิดแผนที่ / นำทาง</a></div></div></div></section>
  <section class="blk" id="book" style="background:var(--surface)"><div class="wrap"><h2>จองคิว</h2>
  ${can?`<form class="book" onsubmit="return submitBooking(event)">
@@ -140,15 +148,15 @@ async function front(){
    <div id="fmsg" role="status">${msg?`<div class="msg">${msg}</div>`:''}</div>
   </form>`:'<div class="msg">ขณะนี้ยังเปิดจองออนไลน์ไม่ได้ กรุณาโทรจองคิว <a href="tel:020018288">02-001-8288</a></div>'}</div></section>
  <footer><div class="wrap">Easy &amp; Perfect Salon · เปิด 10:30–20:30 น. ปิดวันพุธ · โทร 02-001-8288 · <a href="#admin">สำหรับพนักงาน</a></div></footer>`;
- pick='';if(can)renderSlots();
+ pick='';if(can)renderSlots();renderGallery();
 }
 function drawSlots(){
  const f=document.querySelector('form.book');if(!f)return;
- const d=f.date.value,st=+f.stylist.value,nw=new Date(),now=nw.getHours()*60+nw.getMinutes(),closed=new Date(d+'T00:00:00').getDay()===3;
+ const d=f.date.value,st=+f.stylist.value,nw=new Date(),now=nw.getHours()*60+nw.getMinutes(),wed=new Date(d+'T00:00:00').getDay()===3;
  $('#slots').innerHTML=SLOTS.map(t=>{
   const past=d===today()&&(+t.slice(0,2)*60+ +t.slice(3))<=now,tk=taken.some(x=>x.stylist_id===st&&x.slot_time===t);
-  return `<button type="button" class="slot" aria-pressed="${pick===t}" ${closed||past||tk?'disabled':''} onclick="pick='${t}';drawSlots()">${t}</button>`}).join('')
-  +(closed?'<div class="msg" style="grid-column:1/-1">ร้านปิดทุกวันพุธ กรุณาเลือกวันอื่น</div>':'');
+  return `<button type="button" class="slot" aria-pressed="${pick===t}" ${wed||past||tk||closedAt(d,st,t)?'disabled':''} onclick="pick='${t}';drawSlots()">${t}</button>`}).join('')
+  +(wed?'<div class="msg" style="grid-column:1/-1">ร้านปิดทุกวันพุธ กรุณาเลือกวันอื่น</div>':dayClosed(d,st)?'<div class="msg" style="grid-column:1/-1">วันนี้ร้านหรือช่างท่านนี้ไม่รับจอง กรุณาเลือกวันหรือช่างอื่น</div>':'');
 }
 async function renderSlots(){
  const f=document.querySelector('form.book');if(!f)return;
@@ -181,18 +189,23 @@ async function doLogin(e){
  try{await signIn(f.email.value.trim(),f.pw.value);adminOpen()}catch(err){$('#lmsg').innerHTML='<div class="msg">อีเมลหรือรหัสผ่านไม่ถูกต้อง</div>'}
  return false;
 }
-function signOut(){setSess(null);loginView()}
+function signOut(){setSess(null);ROLE=null;loginView()}
 async function adminOpen(){
  if(!sess){loginView();return}
  $('#app').innerHTML='<p class="wrap empty" style="padding:60px 20px">กำลังโหลด...</p>';
+ try{const r=await api('staff_roles?select=role',{auth:true});ROLE=r[0]?r[0].role:null}
+ catch(e){setSess(null);loginView(e.status===404?'ยังไม่ได้รันสคริปต์ฐานข้อมูลชุดใหม่ (supabase-upgrade.sql)':'โหลดข้อมูลไม่สำเร็จ กรุณาเข้าสู่ระบบอีกครั้ง');return}
+ if(!ROLE){setSess(null);loginView('บัญชีนี้ยังไม่ได้รับสิทธิ์เข้าหลังบ้าน กรุณาติดต่อเจ้าของร้าน');return}
  try{await Promise.all([loadPublic(),loadAdmin()])}catch(e){setSess(null);loginView('โหลดข้อมูลไม่สำเร็จ กรุณาเข้าสู่ระบบอีกครั้ง');return}
  admin();
 }
 function admin(){
- const tabs=[['dash','ภาพรวม'],['book','การจอง'],['inc','Walk-in'],['sum','สรุปรายเดือน'],['svc','บริการ'],['sty','ช่าง']];
- $('#app').innerHTML=`<header class="top"><a class="logo" href="#"><img src="${LOGO}" alt="">หลังบ้าน Easy &amp; Perfect</a><span><a class="btn ghost sm" href="#" style="color:var(--ink)">ดูหน้าร้าน</a> <button class="btn ghost sm" onclick="adminOpen()">รีเฟรชข้อมูล</button> <button class="btn ghost sm" onclick="signOut()">ออกจากระบบ</button></span></header>
+ const O=isOwner();
+ const tabs=[['dash','ภาพรวม'],['queue','คิวรายวัน'],['book','การจอง'],['inc','Walk-in'],...(O?[['sum','สรุปรายเดือน'],['svc','บริการ'],['sty','ช่าง'],['cls','ปิดวัน'],['alb','อัลบั้ม'],['bak','สำรองข้อมูล']]:[])];
+ if(!tabs.some(t=>t[0]===tab))tab='dash';
+ $('#app').innerHTML=`<header class="top"><a class="logo" href="#"><img src="${LOGO}" alt="">หลังบ้าน</a><span><span class="tag">${O?'เจ้าของ':'พนักงาน'}</span> <a class="btn ghost sm" href="#" style="color:var(--ink)">ดูหน้าร้าน</a> <button class="btn ghost sm" onclick="adminOpen()">รีเฟรช</button> <button class="btn ghost sm" onclick="signOut()">ออกจากระบบ</button></span></header>
  <div class="wrap adm"><div class="tabs" role="tablist">${tabs.map(([k,v])=>`<button role="tab" aria-selected="${tab===k}" onclick="tab='${k}';admin()">${v}</button>`).join('')}</div><div id="pane"></div></div>`;
- $('#pane').innerHTML=({dash,book,inc,sum,svc,sty})[tab]();
+ $('#pane').innerHTML=({dash,queue,book,inc,sum,svc,sty,cls,alb,bak})[tab]();
 }
 const run=async f=>{try{await f()}catch(e){if(e.message==='auth'||e.status===401){setSess(null);loginView('เซสชันหมดอายุ กรุณาเข้าสู่ระบบอีกครั้ง')}else{alert('บันทึกไม่สำเร็จ: '+e.message);admin()}}};
 const patch=(t,id,body)=>api(`${t}?id=eq.${id}`,{method:'PATCH',body,auth:true,prefer:'return=minimal'});
@@ -205,14 +218,28 @@ function setF(t,id,k,v){if(k==='name'&&!v.trim()){admin();return}upd(t,id,{[k]:k
 function delItem(t,id){if(!confirm('ลบรายการนี้ใช่ไหม'))return;run(async()=>{await api(`${t}?id=eq.${id}`,{method:'DELETE',auth:true,prefer:'return=minimal'});D[t]=D[t].filter(r=>r.id!==id);admin()})}
 
 function dash(){
- const t=today(),bt=D.bookings.filter(b=>b.date===t&&b.status!=='cancel'),done=D.bookings.filter(b=>b.status==='done');
+ const t=today(),R=isOwner(),bt=D.bookings.filter(b=>b.date===t&&b.status!=='cancel'),done=D.bookings.filter(b=>b.status==='done');
  const rev=done.reduce((s,b)=>s+amt(b),0),revT=done.filter(b=>b.date===t).reduce((s,b)=>s+amt(b),0),wait=D.bookings.filter(b=>b.status==='pending').length;
- return `<div class="stats"><div class="stat"><b>${bt.length}</b><span>คิววันนี้</span></div><div class="stat"><b>${wait}</b><span>รอยืนยัน</span></div><div class="stat"><b>${baht(revT)}</b><span>รายได้วันนี้</span></div><div class="stat"><b>${baht(rev)}</b><span>รายได้ทั้งหมด</span></div><div class="stat"><b>${D.bookings.length}</b><span>การจองทั้งหมด</span></div></div>
+ const cards=[[bt.length,'คิววันนี้'],[wait,'รอยืนยัน'],...(R?[[baht(revT),'รายได้วันนี้'],[baht(rev),'รายได้ทั้งหมด']]:[]),[D.bookings.length,'การจองทั้งหมด']];
+ return `<div class="stats">${cards.map(([v,l])=>`<div class="stat"><b>${v}</b><span>${l}</span></div>`).join('')}</div>
  <h3 style="margin-bottom:8px">คิววันนี้</h3>${bt.length?`<div class="scroll"><table><tr><th>เวลา</th><th>ลูกค้า</th><th>บริการ</th><th>ช่าง</th><th>สถานะ</th></tr>${[...bt].sort((a,b)=>a.time.localeCompare(b.time)).map(b=>`<tr><td>${b.time}</td><td>${esc(b.name)}</td><td>${esc(sName(b.service_id))}</td><td>${esc(hName(b.stylist_id))}</td><td><span class="tag">${STATUS[b.status]||b.status}</span></td></tr>`).join('')}</table></div>`:'<div class="empty">วันนี้ยังไม่มีคิว</div>'}`;
 }
+function queue(){qd=qd||today();
+ const bs=D.bookings.filter(b=>b.date===qd&&b.status!=='cancel'),times=[...new Set([...SLOTS,...bs.map(b=>b.time)])].sort(),wed=new Date(qd+'T00:00:00').getDay()===3;
+ const cell=(s,t)=>{const l=bs.filter(x=>x.stylist_id===s.id&&x.time===t);
+  if(l.length)return '<td>'+l.map(b=>`<b>${esc(b.name)}</b>${b.walkin?' <span class="tag">Walk-in</span>':''}<br><small>${esc(sName(b.service_id))} · ${STATUS[b.status]||b.status}</small>`).join('<hr style="border:0;border-top:1px solid var(--line);margin:4px 0">')+'</td>';
+  return `<td style="color:var(--mute)">${wed||closedAt(qd,s.id,t)?'ปิด':'ว่าง'}</td>`};
+ return `<div class="row" style="align-items:center"><button class="btn ghost sm" aria-label="วันก่อนหน้า" onclick="qd=addDay(qd,-1);admin()">◀</button><input type="date" value="${qd}" style="max-width:170px;flex:none" aria-label="วันที่" onchange="qd=this.value||today();admin()"><button class="btn ghost sm" aria-label="วันถัดไป" onclick="qd=addDay(qd,1);admin()">▶</button><button class="btn ghost sm" onclick="qd=today();admin()">วันนี้</button></div>
+ ${D.stylists.length?`<div class="scroll"><table><tr><th>เวลา</th>${D.stylists.map(s=>`<th>${esc(s.name)}</th>`).join('')}</tr>${times.map(t=>`<tr><td>${t}</td>${D.stylists.map(s=>cell(s,t)).join('')}</tr>`).join('')}</table></div>`:'<div class="empty">ยังไม่มีช่าง</div>'}`;
+}
 function book(){
- if(!D.bookings.length)return '<div class="empty">ยังไม่มีการจอง</div>';
- return `<div class="scroll"><table><tr><th>วัน/เวลา</th><th>ลูกค้า</th><th>บริการ</th><th>ช่าง</th><th>ยอดเงิน</th><th>สถานะ</th><th></th></tr>${D.bookings.map(b=>`<tr><td>${b.date}<br>${b.time}</td><td>${esc(b.name)}${b.walkin?' <span class="tag">Walk-in</span>':''}${b.phone?`<br><a href="tel:${esc(b.phone)}" style="color:var(--mute)">${esc(b.phone)}</a>`:''}</td><td>${esc(sName(b.service_id))}</td><td>${esc(hName(b.stylist_id))}</td><td><input type="number" min="0" style="width:100px" aria-label="ยอดเงิน" placeholder="${(svc1(b.service_id)||{}).price||''}" value="${b.amount==null?'':b.amount}" onchange="setAmt(${b.id},this.value)"><select aria-label="ชำระโดย" style="margin-top:4px" onchange="setPay(${b.id},this.value)"><option value="">ไม่ระบุ</option>${['เงินสด','โอน'].map(p=>`<option ${b.pay===p?'selected':''}>${p}</option>`).join('')}</select></td><td><select aria-label="สถานะ" onchange="setStatus(${b.id},this.value)">${Object.entries(STATUS).map(([k,v])=>`<option value="${k}" ${b.status===k?'selected':''}>${v}</option>`).join('')}</select></td><td><button class="btn del sm" onclick="delItem('bookings',${b.id})">ลบ</button></td></tr>`).join('')}</table></div>`;
+ return `<div class="row"><input type="search" placeholder="ค้นหาชื่อ / เบอร์โทร" value="${esc(F.q)}" aria-label="ค้นหา" oninput="F.q=this.value;bk()"><input type="date" value="${F.date}" style="max-width:170px;flex:none" aria-label="วันที่" onchange="F.date=this.value;bk()"><select aria-label="สถานะ" style="max-width:150px" onchange="F.status=this.value;bk()"><option value="">ทุกสถานะ</option>${Object.entries(STATUS).map(([k,v])=>`<option value="${k}" ${F.status===k?'selected':''}>${v}</option>`).join('')}</select><select aria-label="ช่าง" style="max-width:150px" onchange="F.stylist=this.value;bk()"><option value="">ทุกช่าง</option>${D.stylists.map(s=>`<option value="${s.id}" ${String(F.stylist)===String(s.id)?'selected':''}>${esc(s.name)}</option>`).join('')}</select><button class="btn ghost sm" onclick="F={q:'',date:'',status:'',stylist:''};admin()">ล้างตัวกรอง</button></div><div id="bk">${bkTable()}</div>`;
+}
+const bk=()=>{$('#bk').innerHTML=bkTable()};
+function bkTable(){
+ const q=F.q.trim().toLowerCase(),l=D.bookings.filter(b=>(!q||(b.name+' '+b.phone).toLowerCase().includes(q))&&(!F.date||b.date===F.date)&&(!F.status||b.status===F.status)&&(!F.stylist||b.stylist_id===+F.stylist));
+ if(!l.length)return '<div class="empty">ไม่พบรายการ</div>';
+ return `<p class="empty" style="padding:0 0 8px">พบ ${l.length} รายการ</p><div class="scroll"><table><tr><th>วัน/เวลา</th><th>ลูกค้า</th><th>บริการ</th><th>ช่าง</th><th>ยอดเงิน</th><th>สถานะ</th><th></th></tr>${l.map(b=>`<tr><td>${b.date}<br>${b.time}</td><td>${esc(b.name)}${b.walkin?' <span class="tag">Walk-in</span>':''}${b.phone?`<br><a href="tel:${esc(b.phone)}" style="color:var(--mute)">${esc(b.phone)}</a>`:''}</td><td>${esc(sName(b.service_id))}</td><td>${esc(hName(b.stylist_id))}</td><td><input type="number" min="0" style="width:100px" aria-label="ยอดเงิน" placeholder="${(svc1(b.service_id)||{}).price||''}" value="${b.amount==null?'':b.amount}" onchange="setAmt(${b.id},this.value)"><select aria-label="ชำระโดย" style="margin-top:4px" onchange="setPay(${b.id},this.value)"><option value="">ไม่ระบุ</option>${['เงินสด','โอน'].map(p=>`<option ${b.pay===p?'selected':''}>${p}</option>`).join('')}</select></td><td><select aria-label="สถานะ" onchange="setStatus(${b.id},this.value)">${Object.entries(STATUS).map(([k,v])=>`<option value="${k}" ${b.status===k?'selected':''}>${v}</option>`).join('')}</select></td><td>${isOwner()?`<button class="btn del sm" onclick="delItem('bookings',${b.id})">ลบ</button>`:''}</td></tr>`).join('')}</table></div>`;
 }
 function inc(){
  const t=today();
@@ -227,7 +254,7 @@ function inc(){
  <label>ชำระโดย<select name="pay"><option>เงินสด</option><option>โอน</option></select></label>
  <button class="btn">บันทึกรายได้</button></form>
  <p><b>รายได้ walk-in วันนี้: ${baht(total)}</b></p>
- ${wl.length?`<div class="scroll"><table><tr><th>วัน/เวลา</th><th>ลูกค้า</th><th>บริการ</th><th>ช่าง</th><th>ชำระ</th><th>ยอดเงิน</th><th></th></tr>${wl.map(b=>`<tr><td>${b.date}<br>${b.time}</td><td>${esc(b.name)}</td><td>${esc(sName(b.service_id))}</td><td>${esc(hName(b.stylist_id))}</td><td>${esc(b.pay||'')}</td><td>${baht(amt(b))}</td><td><button class="btn del sm" onclick="delItem('bookings',${b.id})">ลบ</button></td></tr>`).join('')}</table></div>`:'<div class="empty">ยังไม่มีรายการ walk-in</div>'}`;
+ ${wl.length?`<div class="scroll"><table><tr><th>วัน/เวลา</th><th>ลูกค้า</th><th>บริการ</th><th>ช่าง</th><th>ชำระ</th><th>ยอดเงิน</th><th></th></tr>${wl.map(b=>`<tr><td>${b.date}<br>${b.time}</td><td>${esc(b.name)}</td><td>${esc(sName(b.service_id))}</td><td>${esc(hName(b.stylist_id))}</td><td>${esc(b.pay||'')}</td><td>${baht(amt(b))}</td><td>${isOwner()?`<button class="btn del sm" onclick="delItem('bookings',${b.id})">ลบ</button>`:''}</td></tr>`).join('')}</table></div>`:'<div class="empty">ยังไม่มีรายการ walk-in</div>'}`;
 }
 function addWalkin(e){
  e.preventDefault();const f=e.target,n=new Date(),p2=x=>String(x).padStart(2,'0');
@@ -265,6 +292,50 @@ function sty(){
  ${D.stylists.length?`<div class="scroll"><table><tr><th>ชื่อ</th><th>ความถนัด</th><th></th></tr>${D.stylists.map(s=>`<tr><td><input value="${esc(s.name)}" aria-label="ชื่อช่าง" onchange="setF('stylists',${s.id},'name',this.value)"></td><td><input value="${esc(s.role)}" aria-label="ความถนัด" onchange="setF('stylists',${s.id},'role',this.value)"></td><td><button class="btn del sm" onclick="delItem('stylists',${s.id})">ลบ</button></td></tr>`).join('')}</table></div>`:'<div class="empty">ยังไม่มีช่าง กรุณาเพิ่มช่างอย่างน้อย 1 คน ลูกค้าจึงจะจองออนไลน์ได้</div>'}`;
 }
 function addSty(e){e.preventDefault();const f=e.target;run(async()=>{await ins('stylists',{name:f.name.value.trim(),role:f.role.value.trim()});admin()});return false}
+
+/* ---------- ปิดวัน ---------- */
+function cls(){const t=today();
+ return `<form class="row" onsubmit="return addCls(event)" style="align-items:end"><label>ตั้งแต่วันที่<input type="date" name="d1" min="${t}" value="${t}" required></label><label>ถึงวันที่<input type="date" name="d2" min="${t}" value="${t}" required></label><label>ช่วงเวลา (เว้นว่าง = ทั้งวัน)<span style="display:flex;gap:6px"><input type="time" name="t1" aria-label="เริ่ม"><input type="time" name="t2" aria-label="ถึง"></span></label><label>ปิดของ<select name="st"><option value="">ทั้งร้าน</option>${D.stylists.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select></label><label>เหตุผล<input name="why" placeholder="เช่น ช่างลา วันหยุด"></label><button class="btn">เพิ่ม</button></form>
+ ${D.closures.length?`<div class="scroll"><table><tr><th>วันที่</th><th>เวลา</th><th>ปิดของ</th><th>เหตุผล</th><th></th></tr>${D.closures.map(c=>`<tr><td>${c.start_date}${c.end_date!==c.start_date?' ถึง '+c.end_date:''}</td><td>${c.start_time?c.start_time+'–'+c.end_time:'ทั้งวัน'}</td><td>${c.stylist_id==null?'ทั้งร้าน':esc(hName(c.stylist_id))}</td><td>${esc(c.reason||'')}</td><td><button class="btn del sm" onclick="delItem('closures',${c.id})">ลบ</button></td></tr>`).join('')}</table></div>`:'<div class="empty">ยังไม่มีการปิดวัน (แสดงเฉพาะที่ยังไม่ผ่านไป)</div>'}`;
+}
+function addCls(e){e.preventDefault();const f=e.target,d1=f.d1.value,d2=f.d2.value,t1=f.t1.value,t2=f.t2.value;
+ if(d2<d1){alert('วันที่สิ้นสุดต้องไม่ก่อนวันเริ่ม');return false}
+ if(!!t1!==!!t2||(t1&&t1>=t2)){alert('กรุณาใส่ช่วงเวลาให้ครบทั้งเริ่มและสิ้นสุด (เริ่มต้องก่อนสิ้นสุด) หรือเว้นว่างทั้งคู่');return false}
+ run(async()=>{await ins('closures',{start_date:d1,end_date:d2,start_time:t1||null,end_time:t2||null,stylist_id:f.st.value?+f.st.value:null,reason:f.why.value.trim()});admin()});return false}
+
+/* ---------- สำรองข้อมูล ---------- */
+function bak(){return `<p>ดาวน์โหลดข้อมูลเก็บไว้เป็นระยะ (แนะนำทุกสิ้นเดือน) เพราะแพ็กเกจฟรีของ Supabase ไม่มีสำรองข้อมูลให้</p><div class="row"><button class="btn" onclick="expCsv('bookings')">การจอง/รายได้ (CSV)</button><button class="btn" onclick="expCsv('services')">บริการ (CSV)</button><button class="btn" onclick="expCsv('stylists')">ช่าง (CSV)</button><button class="btn ghost" onclick="expJson()">สำรองทั้งหมด (JSON)</button></div><p class="empty">ไฟล์ CSV เปิดด้วย Excel ได้ ภาษาไทยไม่เพี้ยน ส่วน JSON ไว้เก็บเป็นไฟล์สำรอง</p>`}
+function dl(name,text,type){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type}));a.download=name;document.body.appendChild(a);a.click();a.remove()}
+function expCsv(t){
+ const rows=D[t].map(r=>{const o={...r};if(t==='bookings'){o.service=sName(r.service_id);o.stylist=hName(r.stylist_id)}return o});
+ const cols=[...new Set(rows.flatMap(r=>Object.keys(r)))];
+ const q=v=>{let x=String(v==null?'':v);if(/^[=+\-@]/.test(x))x="'"+x;return '"'+x.replace(/"/g,'""')+'"'};
+ dl(`${t}-${today()}.csv`,'\ufeff'+[cols.map(q).join(','),...rows.map(r=>cols.map(c=>q(r[c])).join(','))].join('\r\n'),'text/csv');
+}
+function expJson(){dl(`salon-backup-${today()}.json`,JSON.stringify({exported:new Date().toISOString(),services:D.services,stylists:D.stylists,bookings:D.bookings,closures:D.closures,albums:D.albums,photos:D.photos},null,1),'application/json')}
+
+/* ---------- อัลบั้มรูป ---------- */
+function renderGallery(){const el=$('#gal');if(!el)return;const ph=D.photos;if(!ph.length){el.style.display='none';return}el.style.display='';
+ const al=D.albums.filter(a=>ph.some(p=>p.album_id===a.id));if(galSel!=='all'&&!al.some(a=>a.id===galSel))galSel='all';
+ const list=galSel==='all'?ph:ph.filter(p=>p.album_id===galSel);
+ el.innerHTML=`<div class="wrap"><h2>แกลเลอรี่</h2><div class="chips"><button class="chip" aria-pressed="${galSel==='all'}" onclick="galSel='all';renderGallery()">ทั้งหมด</button>${al.map(a=>`<button class="chip" aria-pressed="${galSel===a.id}" onclick="galSel=${a.id};renderGallery()">${esc(a.name)}</button>`).join('')}</div><div class="gal">${list.map(p=>`<button class="ph" onclick="openPh(${p.id})" aria-label="ดูรูปใหญ่"><img src="${photoUrl(p.path)}" alt="${esc(p.caption||'')}" loading="lazy"></button>`).join('')}</div></div>`}
+function openPh(id){const p=D.photos.find(x=>x.id===id);if(!p)return;const d=document.createElement('div');d.className='lb';d.setAttribute('role','dialog');d.innerHTML=`<img src="${photoUrl(p.path)}" alt="${esc(p.caption||'')}"><p>${esc(p.caption||'')}</p><button class="btn">ปิด</button>`;d.onclick=e=>{if(e.target.tagName!=='IMG')d.remove()};document.body.appendChild(d);d.querySelector('button').focus()}
+addEventListener('keydown',e=>{if(e.key==='Escape'){const l=document.querySelector('.lb');if(l)l.remove()}});
+function alb(){if(!D.albums.some(a=>a.id===admAlb))admAlb=D.albums.length?D.albums[0].id:0;const ph=D.photos.filter(p=>p.album_id===admAlb);
+ return `<form class="row" onsubmit="return addAlb(event)"><input name="name" placeholder="ชื่ออัลบั้มใหม่ เช่น ผลงานทำสี" required><button class="btn">สร้างอัลบั้ม</button></form>
+ ${D.albums.length?`<div class="row"><select aria-label="อัลบั้ม" style="max-width:260px;flex:none" onchange="admAlb=+this.value;admin()">${D.albums.map(a=>`<option value="${a.id}" ${admAlb===a.id?'selected':''}>${esc(a.name)}</option>`).join('')}</select><button class="btn" onclick="document.getElementById('pf').click()">เพิ่มรูป</button><input id="pf" type="file" accept="image/*" multiple hidden onchange="addPhotos(this.files)"><button class="btn del" onclick="delAlb()">ลบอัลบั้มนี้</button></div><div id="amsg" role="status"></div>${ph.length?`<div class="thumbs">${ph.map(p=>`<figure><img src="${photoUrl(p.path)}" alt="${esc(p.caption||'')}"><input value="${esc(p.caption||'')}" placeholder="คำบรรยาย" aria-label="คำบรรยาย" onchange="setF('photos',${p.id},'caption',this.value)"><button class="btn del sm" onclick="delPhoto(${p.id})">ลบรูป</button></figure>`).join('')}</div>`:'<div class="empty">อัลบั้มนี้ยังไม่มีรูป กด เพิ่มรูป เพื่อเลือกไฟล์</div>'}`:'<div class="empty">สร้างอัลบั้มแรกก่อน แล้วค่อยเพิ่มรูป</div>'}`;
+}
+function addAlb(e){e.preventDefault();const f=e.target;run(async()=>{await ins('albums',{name:f.name.value.trim()});admAlb=D.albums[D.albums.length-1].id;admin()});return false}
+const shrinkB=f=>new Promise((ok,no)=>{const r=new FileReader();r.onerror=no;r.onload=()=>{const im=new Image();im.onerror=no;im.onload=()=>{const s=Math.min(1,1400/Math.max(im.width,im.height)),c=document.createElement('canvas');c.width=Math.round(im.width*s);c.height=Math.round(im.height*s);c.getContext('2d').drawImage(im,0,0,c.width,c.height);c.toBlob(b=>b?ok(b):no(),'image/jpeg',.82)};im.src=r.result};r.readAsDataURL(f)});
+const delFile=async p=>{const t=await token();await fetch(SB+'/storage/v1/object/photos/'+p,{method:'DELETE',headers:{apikey:KEY,Authorization:'Bearer '+t}})};
+async function addPhotos(files){let n=0,bad=0;
+ for(const f of files){try{const blob=await shrinkB(f),t=await token();if(!t)throw new Error('auth');
+  const path=`${admAlb}/${Date.now()}-${Math.random().toString(36).slice(2,8)}.jpg`;
+  const r=await fetch(SB+'/storage/v1/object/photos/'+path,{method:'POST',headers:{apikey:KEY,Authorization:'Bearer '+t,'Content-Type':'image/jpeg'},body:blob});if(!r.ok)throw new Error('upload');
+  try{await ins('photos',{album_id:admAlb,path,caption:''})}catch(e){try{await delFile(path)}catch(x){}throw e}n++}catch(e){bad++}}
+ admin();$('#amsg').innerHTML=`<div class="msg">เพิ่มรูปแล้ว ${n} รูป${bad?` · ไม่สำเร็จ ${bad} รูป`:''}</div>`}
+function delPhoto(id){if(!confirm('ลบรูปนี้ใช่ไหม'))return;run(async()=>{const p=D.photos.find(x=>x.id===id);await api(`photos?id=eq.${id}`,{method:'DELETE',auth:true,prefer:'return=minimal'});try{await delFile(p.path)}catch(e){}D.photos=D.photos.filter(x=>x.id!==id);admin()})}
+function delAlb(){if(!confirm('ลบอัลบั้มและรูปทั้งหมดในอัลบั้มนี้ใช่ไหม'))return;run(async()=>{for(const p of D.photos.filter(p=>p.album_id===admAlb)){try{await delFile(p.path)}catch(e){}}await api(`albums?id=eq.${admAlb}`,{method:'DELETE',auth:true,prefer:'return=minimal'});D.albums=D.albums.filter(a=>a.id!==admAlb);D.photos=D.photos.filter(p=>p.album_id!==admAlb);admAlb=0;admin()})}
 route();
 </script>
 </body>
